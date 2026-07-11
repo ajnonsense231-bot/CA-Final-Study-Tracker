@@ -382,7 +382,7 @@ textarea { resize: vertical; font-size: 12px; line-height: 1.5; }
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 // ─── CONFIG — replace this with your deployed Apps Script URL ───
-const SHEET_API = 'https://script.google.com/macros/s/AKfycbx4dvKAznKjGxFslq-qR28lZd9YiLIKu2nY6axfSch0WaYaZboGblFukC_F-_Zp9-lW-A/exec';
+const SHEET_API = 'https://script.google.com/macros/s/AKfycbzJhSTTV6gSCOFY_7efoDKJNoTl2CzY002bkEb8UTvqk1waStaW7UVI9CzrnENQbm-9JQ/exec';
 // ────────────────────────────────────────────────────────────────
 
 const PAPERS = [
@@ -468,7 +468,6 @@ function parseDate(raw) {
 }
 
 async function writeToSheet(key, entry) {
-  // Convert entry back to row(s) and POST
   const rows = [];
   if (entry === null) {
     rows.push({ date: key, type: 'delete' });
@@ -480,14 +479,17 @@ async function writeToSheet(key, entry) {
     });
   }
   try {
-    await fetch(SHEET_API, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ action: 'write', key, rows })
-    });
-    showToast('saved to Google Sheets');
+    // Use GET to avoid CORS issues with GitHub Pages → Apps Script
+    const url = SHEET_API + '?action=write&key=' + encodeURIComponent(key) + '&rows=' + encodeURIComponent(JSON.stringify(rows));
+    const res = await fetch(url, {cache:'no-store'});
+    const json = await res.json();
+    if (json.status === 'ok') {
+      showToast('saved to Google Sheets ✓');
+    } else {
+      showToast('save failed: ' + (json.message||'unknown error'));
+    }
   } catch(e) {
-    showToast('saved locally — sync failed');
+    showToast('could not reach Google Sheets — check connection');
   }
 }
 
