@@ -382,7 +382,7 @@ textarea { resize: vertical; font-size: 12px; line-height: 1.5; }
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 // ─── CONFIG — replace this with your deployed Apps Script URL ───
-const SHEET_API = 'https://script.google.com/macros/s/AKfycbzT16UMcJpkSTF_C6R581WAdudxAihwYyRX9dsPpFRUGt_dFcfCyH9ZBWItrKDto79brw/exec';
+const SHEET_API = 'https://script.google.com/macros/s/AKfycbwzQkDxB0TTYh5k-DMSelaYvJAJ0V3IS9iO5D4o5vO8tLKP6i-1AlqZtByCb2xbnUcZ/exec';
 // ────────────────────────────────────────────────────────────────
 
 const PAPERS = [
@@ -459,7 +459,8 @@ function parseDate(raw) {
       if (parseFloat(r.hours) > 0) {
         d[dateKey].sessions.push({
           subject: r.subject, chapter: r.chapter||'',
-          hours: parseFloat(r.hours), topic: r.topic||'', next: r.next_steps||''
+          hours: parseFloat(r.hours), topic: r.topic||'', next: r.next_steps||'',
+          completed: r.completed === 'yes'
         });
       }
     }
@@ -484,12 +485,14 @@ async function writeToSheet(key, entry) {
         hours: String(s.hours||''),
         topic: s.topic||'',
         next_steps: s.next||'',
-        rest_reason: ''
+        rest_reason: '',
+        completed: s.completed ? 'yes' : 'no'
       });
     });
   }
   try {
-    const payload = JSON.stringify({ action: 'write', key: key, rows: rows });
+    // Ensure every row has the date explicitly set
+    rows.forEach(r => { r.date = key; });
     const url = SHEET_API + '?action=write&key=' + encodeURIComponent(key) + '&rows=' + encodeURIComponent(JSON.stringify(rows));
     const res = await fetch(url, { cache: 'no-store' });
     const text = await res.text();
@@ -566,6 +569,10 @@ function makeSessionCard(sess, idx) {
       <div class="next-field-lbl"><i class="ti ti-arrow-right" style="font-size:11px"></i> what to do next (optional)</div>
       <textarea rows="2" placeholder="e.g. Redo questions on Ch 3, revise before next session…" oninput="sc(${idx},'next',this.value)">${sess.next||''}</textarea>
     </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px dashed var(--border2)">
+      <input type="checkbox" id="chk-done-${idx}" ${sess.completed?'checked':''} onchange="sc(${idx},'completed',this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--success)">
+      <label for="chk-done-${idx}" style="font-size:12px;color:var(--text-secondary);cursor:pointer;user-select:none">mark chapter as <b>completed</b> (not just started)</label>
+    </div>
   `;
   return d;
 }
@@ -576,7 +583,7 @@ function renderSessions() {
   sessions.forEach((s,i) => list.appendChild(makeSessionCard(s,i)));
 }
 function addSession() {
-  sessions.push({subject: PAPERS[0].id, chapter:'', hours:'', topic:'', next:''});
+  sessions.push({subject: PAPERS[0].id, chapter:'', hours:'', topic:'', next:'', completed:false});
   renderSessions();
 }
 function removeSession(i) { sessions.splice(i,1); renderSessions(); }
@@ -595,7 +602,7 @@ function openModal(key, dt) {
     selType('study');
     sessions = entry && entry.sessions
       ? JSON.parse(JSON.stringify(entry.sessions))
-      : [{subject: PAPERS[0].id, chapter:'', hours:'', topic:'', next:''}];
+      : [{subject: PAPERS[0].id, chapter:'', hours:'', topic:'', next:'', completed:false}];
     renderSessions();
   }
   document.getElementById('modal-overlay').classList.add('open');
@@ -764,32 +771,71 @@ function renderChapters() {
     });
   });
   document.getElementById('chap-view').innerHTML = PAPERS.map(p=>{
-    const done = [...cm[p.id]].map(c=>parseInt(c)).filter(n=>!isNaN(n));
-    const doneSet = new Set(done);
-    if (p.totalChap===null) {
-      const topics=[...cm[p.id]];
+    // Build sets: completed chapters and in-progress chapters
+    const completedSet = new Set();
+    const inProgressSet = new Set();
+    Object.values(data).forEach(v => {
+      if (v.type === 'study') v.sessions.forEach(s => {
+        if (s.subject !== p.id) return;
+        if (!s.chapter || !s.chapter.trim()) return;
+        s.chapter.split(',').forEach(c => {
+          const num = parseInt(c.trim());
+          if (isNaN(num)) return;
+          if (s.completed) completedSet.add(num);
+          else inProgressSet.add(num);
+        });
+      });
+    });
+    // A chapter is only in-progress if not yet completed
+    inProgressSet.forEach(n => { if (completedSet.has(n)) inProgressSet.delete(n); });
+
+    if (p.totalChap === null) {
+      const topics = [...completedSet, ...inProgressSet];
       return `<div class="chap-block">
         <div class="chap-top">
           <div class="chap-name"><span style="width:10px;height:10px;border-radius:50%;background:${p.color};display:inline-block;flex-shrink:0"></span>${p.label}</div>
           <div class="chap-meta">topic-based — no chapter structure</div>
         </div>
-        <div class="chips-row">${topics.length?topics.map(t=>`<span class="chip done">${t}</span>`).join(''):'<span style="font-size:11px;color:#9ca3af">nothing logged yet</span>'}</div>
+        <div class="chips-row">${topics.length ? topics.map(t=>`<span class="chip done">${t}</span>`).join('') : '<span style="font-size:11px;color:#9ca3af">nothing logged yet</span>'}</div>
       </div>`;
     }
-    const total=p.totalChap, coveredCount=doneSet.size, pct=Math.round((coveredCount/total)*100);
-    const allChaps=Array.from({length:total},(_,i)=>i+1);
-    const missing=allChaps.filter(n=>!doneSet.has(n));
+
+    const total = p.totalChap;
+    const completedCount = completedSet.size;
+    const inProgressCount = inProgressSet.size;
+    const pct = Math.round((completedCount / total) * 100);
+    const allChaps = Array.from({length:total}, (_,i) => i+1);
+    const missing = allChaps.filter(n => !completedSet.has(n) && !inProgressSet.has(n));
+
     return `<div class="chap-block">
       <div class="chap-top">
         <div class="chap-name"><span style="width:10px;height:10px;border-radius:50%;background:${p.color};display:inline-block;flex-shrink:0"></span>${p.label}</div>
-        <div class="chap-meta"><b>${coveredCount}</b> of ${total} &nbsp;·&nbsp; <b>${pct}%</b> done &nbsp;·&nbsp; ${total-coveredCount} remaining</div>
+        <div class="chap-meta">
+          <span style="color:#16a34a;font-weight:500">${completedCount} completed</span> &nbsp;·&nbsp;
+          <span style="color:#d97706;font-weight:500">${inProgressCount} in progress</span> &nbsp;·&nbsp;
+          ${missing.length} not started &nbsp;·&nbsp; ${total} total
+        </div>
       </div>
-      <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${p.color}"></div></div>
-      <div class="prog-labels"><span>0</span><span>${Math.round(total/2)}</span><span>${total}</span></div>
-      <div class="chips-row">${allChaps.map(n=>doneSet.has(n)?`<span class="chip done">Ch ${n}</span>`:`<span class="chip todo">Ch ${n}</span>`).join('')}</div>
+      <div style="display:flex;gap:4px;margin-bottom:3px">
+        <div style="height:7px;border-radius:20px 0 0 20px;background:#16a34a;width:${Math.round(completedCount/total*100)}%;transition:width .4s;${completedCount===0?'display:none':''}"></div>
+        <div style="height:7px;background:#f59e0b;width:${Math.round(inProgressCount/total*100)}%;transition:width .4s;${inProgressCount===0?'display:none':''}"></div>
+        <div style="height:7px;border-radius:${completedCount===0&&inProgressCount===0?'20px':'0 20px 20px 0'};background:#e5e7eb;flex:1;transition:width .4s;${missing.length===0?'display:none':''}"></div>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:10px">
+        <span style="font-size:10px;color:#16a34a;display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block"></span>completed</span>
+        <span style="font-size:10px;color:#d97706;display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block"></span>in progress</span>
+        <span style="font-size:10px;color:#9ca3af;display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:50%;background:#e5e7eb;display:inline-block"></span>not started</span>
+      </div>
+      <div class="chips-row">${allChaps.map(n => {
+        if (completedSet.has(n)) return `<span class="chip done">Ch ${n}</span>`;
+        if (inProgressSet.has(n)) return `<span class="chip" style="border-color:#fde68a;background:#fffbeb;color:#d97706">Ch ${n} ⟳</span>`;
+        return `<span class="chip todo">Ch ${n}</span>`;
+      }).join('')}</div>
       ${missing.length
-        ? `<div class="missing-label">not yet covered (${missing.length}):</div><div class="missing-row">${missing.map(n=>`<span class="missing-chip">Ch ${n}</span>`).join('')}</div>`
-        : `<div style="font-size:11px;color:#16a34a;margin-top:4px"><i class="ti ti-circle-check"></i> all chapters covered!</div>`
+        ? `<div class="missing-label">not yet started (${missing.length}):</div><div class="missing-row">${missing.map(n=>`<span class="missing-chip">Ch ${n}</span>`).join('')}</div>`
+        : completedCount === total
+          ? `<div style="font-size:11px;color:#16a34a;margin-top:4px"><i class="ti ti-circle-check"></i> all chapters completed!</div>`
+          : `<div style="font-size:11px;color:#d97706;margin-top:4px"><i class="ti ti-clock"></i> ${inProgressCount} chapter(s) still in progress</div>`
       }
     </div>`;
   }).join('');
