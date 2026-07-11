@@ -436,17 +436,28 @@ async function syncNow() {
   }
 }
 
-function buildDataFromRows(rows) {
+function parseDate(raw) {
+    if (!raw) return null;
+    // Handle "Thu May 14 2026 00:00:00 GMT+0530 (India Standard Time)" format
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+    // Already in YYYY-MM-DD format
+    return String(raw).trim().slice(0,10);
+  }
+
+  function buildDataFromRows(rows) {
   // rows = [{date, type, subject, chapter, hours, topic, next_steps, rest_reason}, ...]
   const d = {};
   rows.forEach(r => {
-    if (!r.date) return;
+    const dateKey = parseDate(r.date); if (!dateKey) return;
     if (r.type === 'rest') {
-      d[r.date] = { type: 'rest', reason: r.rest_reason || '' };
+      d[dateKey] = { type: 'rest', reason: r.rest_reason || '' };
     } else if (r.type === 'study') {
-      if (!d[r.date]) d[r.date] = { type: 'study', sessions: [] };
+      if (!d[dateKey]) d[dateKey] = { type: 'study', sessions: [] };
       if (parseFloat(r.hours) > 0) {
-        d[r.date].sessions.push({
+        d[dateKey].sessions.push({
           subject: r.subject, chapter: r.chapter||'',
           hours: parseFloat(r.hours), topic: r.topic||'', next: r.next_steps||''
         });
