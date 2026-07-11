@@ -382,7 +382,7 @@ textarea { resize: vertical; font-size: 12px; line-height: 1.5; }
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 // ─── CONFIG — replace this with your deployed Apps Script URL ───
-const SHEET_API = 'https://script.google.com/macros/s/AKfycbzJhSTTV6gSCOFY_7efoDKJNoTl2CzY002bkEb8UTvqk1waStaW7UVI9CzrnENQbm-9JQ/exec';
+const SHEET_API = 'https://script.google.com/macros/s/AKfycbzT16UMcJpkSTF_C6R581WAdudxAihwYyRX9dsPpFRUGt_dFcfCyH9ZBWItrKDto79brw/exec';
 // ────────────────────────────────────────────────────────────────
 
 const PAPERS = [
@@ -468,28 +468,40 @@ function parseDate(raw) {
 }
 
 async function writeToSheet(key, entry) {
+  // Build rows with date explicitly set from key
   const rows = [];
   if (entry === null) {
-    rows.push({ date: key, type: 'delete' });
+    rows.push({ date: key, type: 'delete', subject:'', chapter:'', hours:'', topic:'', next_steps:'', rest_reason:'' });
   } else if (entry.type === 'rest') {
     rows.push({ date: key, type: 'rest', subject:'', chapter:'', hours:'', topic:'', next_steps:'', rest_reason: entry.reason||'' });
   } else {
     entry.sessions.forEach(s => {
-      rows.push({ date: key, type:'study', subject: s.subject, chapter: s.chapter||'', hours: s.hours, topic: s.topic||'', next_steps: s.next||'', rest_reason:'' });
+      rows.push({
+        date: key,
+        type: 'study',
+        subject: s.subject||'',
+        chapter: String(s.chapter||''),
+        hours: String(s.hours||''),
+        topic: s.topic||'',
+        next_steps: s.next||'',
+        rest_reason: ''
+      });
     });
   }
   try {
-    // Use GET to avoid CORS issues with GitHub Pages → Apps Script
+    const payload = JSON.stringify({ action: 'write', key: key, rows: rows });
     const url = SHEET_API + '?action=write&key=' + encodeURIComponent(key) + '&rows=' + encodeURIComponent(JSON.stringify(rows));
-    const res = await fetch(url, {cache:'no-store'});
-    const json = await res.json();
+    const res = await fetch(url, { cache: 'no-store' });
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch(pe) { throw new Error('Bad response: ' + text.slice(0,100)); }
     if (json.status === 'ok') {
       showToast('saved to Google Sheets ✓');
     } else {
-      showToast('save failed: ' + (json.message||'unknown error'));
+      showToast('save failed: ' + (json.message||'unknown'));
     }
   } catch(e) {
-    showToast('could not reach Google Sheets — check connection');
+    showToast('error: ' + e.message);
   }
 }
 
